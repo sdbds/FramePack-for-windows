@@ -97,7 +97,7 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, save_section_frames):
+def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, save_section_frames, section_settings=None):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -106,6 +106,40 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
     try:
+        # セクション設定の前処理
+        def get_section_settings_map(section_settings):
+            """
+            section_settings: DataFrame形式のリスト [[番号, 画像, プロンプト], ...]
+            → {セクション番号: (画像, プロンプト)} のdict
+            """
+            result = {}
+            if section_settings is not None:
+                for row in section_settings:
+                    if row and row[0] is not None:
+                        sec_num = int(row[0])
+                        img = row[1]
+                        prm = row[2] if len(row) > 2 else ""
+                        result[sec_num] = (img, prm)
+            return result
+
+        section_map = get_section_settings_map(section_settings)
+        section_numbers_sorted = sorted(section_map.keys()) if section_map else []
+
+        def get_section_info(i_section):
+            """
+            i_section: int
+            section_map: {セクション番号: (画像, プロンプト)}
+            指定がなければ次のセクション、なければNone
+            """
+            if not section_map:
+                return None, None, None
+            # i_section以降で最初に見つかる設定
+            for sec in range(i_section, max(section_numbers_sorted)+1):
+                if sec in section_map:
+                    img, prm = section_map[sec]
+                    return sec, img, prm
+            return None, None, None
+
         # Clean GPU
         if not high_vram:
             unload_complete_models(
@@ -159,6 +193,16 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
             end_frame_latent = vae_encode(end_frame_pt, vae)
         else:
             end_frame_latent = None
+            
+        # create section_latents here
+        section_latents = None
+        if section_map:
+            section_latents = {}
+            for sec_num, (img, prm) in section_map.items():
+                if img is not None:
+                    # 画像をVAE encode
+                    img_np, img_pt, _, _ = preprocess_image(img)
+                    section_latents[sec_num] = vae_encode(img_pt, vae)
 
         # CLIP Vision
 
@@ -203,6 +247,24 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
             is_last_section = latent_padding == 0
             use_end_latent = is_last_section and end_frame is not None
             latent_padding_size = latent_padding * latent_window_size
+            # set current_latent here
+            # セクションごとのlatentを使う場合
+            if section_map and section_latents is not None and len(section_latents) > 0:
+                # i_section以上で最小のsection_latentsキーを探す
+                valid_keys = [k for k in section_latents.keys() if k >= i_section]
+                if valid_keys:
+                    use_key = min(valid_keys)
+                    current_latent = section_latents[use_key]
+                    print(f"[section_latent] section {i_section}: use section {use_key} latent (section_map keys: {list(section_latents.keys())})")
+                    print(f"[section_latent] current_latent id: {id(current_latent)}, min: {current_latent.min().item():.4f}, max: {current_latent.max().item():.4f}, mean: {current_latent.mean().item():.4f}")
+                else:
+                    current_latent = start_latent
+                    print(f"[section_latent] section {i_section}: use start_latent (no section_latent >= {i_section})")
+                    print(f"[section_latent] current_latent id: {id(current_latent)}, min: {current_latent.min().item():.4f}, max: {current_latent.max().item():.4f}, mean: {current_latent.mean().item():.4f}")
+            else:
+                current_latent = start_latent
+                print(f"[section_latent] section {i_section}: use start_latent (no section_latents)")
+                print(f"[section_latent] current_latent id: {id(current_latent)}, min: {current_latent.min().item():.4f}, max: {current_latent.max().item():.4f}, mean: {current_latent.mean().item():.4f}")
 
             if is_first_section and end_frame_latent is not None:
                 history_latents[:, :, 0:1, :, :] = end_frame_latent
@@ -217,7 +279,7 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
             clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
 
-            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_pre = current_latent.to(history_latents)
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
             clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
 
@@ -345,7 +407,7 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
     return
 
 
-def process(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed, save_section_frames):
+def process(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed, save_section_frames, section_settings):
     global stream
     assert input_image is not None, 'No input image!'
 
@@ -358,7 +420,7 @@ def process(input_image, end_frame, prompt, n_prompt, seed, total_second_length,
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, save_section_frames)
+    async_run(worker, input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, save_section_frames, section_settings)
 
     output_filename = None
 
@@ -439,12 +501,39 @@ with block:
                 # セクションごとの静止画保存チェックボックスを追加（デフォルトON）
                 save_section_frames = gr.Checkbox(label="セクションごとの静止画を保存", value=True, info="各セクションの最終フレームを静止画として保存します（デフォルトON）")
 
+                # セクション設定（DataFrameをやめて個別入力欄に変更）
+                section_number_inputs = []
+                section_image_inputs = []
+                section_prompt_inputs = []  # 空リストにしておく
+                with gr.Group():
+                    gr.Markdown("### セクション設定. セクション番号は動画の終わりからカウント.（任意。指定しない場合は通常のImage/プロンプトを使用）")
+                    for i in range(3):
+                        with gr.Row():
+                            section_number = gr.Number(label=f"セクション番号{i+1}", value=None, precision=0)
+                            section_image = gr.Image(label=f"キーフレーム画像{i+1}", sources="upload", type="numpy", height=200)
+                            section_number_inputs.append(section_number)
+                            section_image_inputs.append(section_image)
+                # section_settingsは3つの入力欄の値をまとめてリスト化
+                def collect_section_settings(*args):
+                    # args: [num1, img1, num2, img2, ...]
+                    return [[args[i], args[i+1], ""] for i in range(0, len(args), 2)]
+                section_settings = gr.State([[None, None, ""] for _ in range(3)])
+                section_inputs = []
+                for i in range(3):
+                    section_inputs.extend([section_number_inputs[i], section_image_inputs[i]])
+                # section_inputsをまとめてsection_settings Stateに格納
+                def update_section_settings(*args):
+                    return collect_section_settings(*args)
+                # section_inputsが変化したらsection_settings Stateを更新
+                for inp in section_inputs:
+                    inp.change(fn=update_section_settings, inputs=section_inputs, outputs=section_settings)
+
         with gr.Column():
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-    ips = [input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed, save_section_frames]
+    ips = [input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed, save_section_frames, section_settings]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, seed])
     end_button.click(fn=end_process)
 
