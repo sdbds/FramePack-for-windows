@@ -97,7 +97,7 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache):
+def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, save_section_frames):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -300,17 +300,22 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
                 current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
 
-            # 先頭セクションでend_frameが指定されていない場合、history_pixelsの最終フレームを保存
-            if is_first_section and end_frame is None and history_pixels is not None:
+            # 各セクションの最終フレームを静止画として保存（セクション番号付き）
+            if save_section_frames and history_pixels is not None:
                 try:
                     last_frame = history_pixels[0, :, -1, :, :]  # (C, H, W) 最終フレーム
                     last_frame = einops.rearrange(last_frame, 'c h w -> h w c')
                     last_frame = last_frame.cpu().numpy()
                     last_frame = np.clip((last_frame * 127.5 + 127.5), 0, 255).astype(np.uint8)
                     last_frame = resize_and_center_crop(last_frame, target_width=width, target_height=height)
-                    Image.fromarray(last_frame).save(os.path.join(outputs_folder, f'{job_id}_end.png'))
+                    if is_first_section and end_frame is None:
+                        # 既存のend保存（_end付き）
+                        Image.fromarray(last_frame).save(os.path.join(outputs_folder, f'{job_id}_{i_section}_end.png'))
+                    else:
+                        # セクションごとに番号付きで保存
+                        Image.fromarray(last_frame).save(os.path.join(outputs_folder, f'{job_id}_{i_section}.png'))
                 except Exception as e:
-                    print(f"[WARN] 最終フレーム画像保存時にエラー: {e}")
+                    print(f"[WARN] セクション{ i_section }最終フレーム画像保存時にエラー: {e}")
 
             if not high_vram:
                 unload_complete_models()
@@ -337,7 +342,7 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
     return
 
 
-def process(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed):
+def process(input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed, save_section_frames):
     global stream
     assert input_image is not None, 'No input image!'
 
@@ -350,7 +355,7 @@ def process(input_image, end_frame, prompt, n_prompt, seed, total_second_length,
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache)
+    async_run(worker, input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, save_section_frames)
 
     output_filename = None
 
@@ -401,10 +406,15 @@ with block:
 
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
-                use_random_seed = gr.Checkbox(label="Use Random Seed", value=True)
+
+                # Use Random Seedの初期値
+                use_random_seed_default = True
+                seed_default = random.randint(0, 2**32 - 1) if use_random_seed_default else 31337
+
+                use_random_seed = gr.Checkbox(label="Use Random Seed", value=use_random_seed_default)
 
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)  # Not used
-                seed = gr.Number(label="Seed", value=31337, precision=0)
+                seed = gr.Number(label="Seed", value=seed_default, precision=0)
 
                 def set_random_seed(is_checked):
                     if is_checked:
@@ -423,12 +433,15 @@ with block:
 
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
 
+                # セクションごとの静止画保存チェックボックスを追加（デフォルトON）
+                save_section_frames = gr.Checkbox(label="セクションごとの静止画を保存", value=True, info="各セクションの最終フレームを静止画として保存します（デフォルトON）")
+
         with gr.Column():
             result_video = gr.Video(label="Finished Frames", autoplay=True, show_share_button=False, height=512, loop=True)
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
-    ips = [input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed]
+    ips = [input_image, end_frame, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, use_random_seed, save_section_frames]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, seed])
     end_button.click(fn=end_process)
 
