@@ -1,3 +1,8 @@
+torch==2.6.0
+torchvision
+torchaudio
+xformers
+
 accelerate==1.6.0
 diffusers==0.33.1
 transformers==4.46.2
@@ -13,3 +18,9 @@ torchsde==0.2.6
 einops
 opencv-contrib-python
 safetensors
+
+triton-windows ; sys_platform == 'win32'
+https://github.com/sdbds/flash-attention-for-windows/releases/download/311%2Btorch260%2Bcu126/flash_attn-2.7.4.post1+cu126torch2.6.0cxx11abiFALSEfullbackward-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'
+https://github.com/sdbds/SageAttention-for-windows/releases/download/2.11_torch2.6.0%2Bcu126/sageattention-2.1.1+cu126torch2.6.0-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'
+flash-attn; sys_platform == 'linux'
+sageattention; sys_platform == 'linux'
