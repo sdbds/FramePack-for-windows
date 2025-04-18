@@ -46,5 +46,5 @@ if ($inbrowser) {
 }
 
 # run Gradio
-python "./demo_gradio.py" `
+python "./endframe.py" `
     $ext_args
