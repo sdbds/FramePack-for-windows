@@ -32,7 +32,8 @@ from diffusers_helper.bucket_tools import find_nearest_bucket
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='127.0.0.1')
-parser.add_argument("--port", type=int, default=8001)
+parser.add_argument("--port", type=int, default=None)
+parser.add_argument("--inbrowser", action='store_true')
 args = parser.parse_args()
 
 print(args)
@@ -380,7 +381,7 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
                     else:
                         Image.fromarray(last_frame).save(os.path.join(outputs_folder, f'{job_id}_{i_section}.png'))
                 except Exception as e:
-                    print(f"[WARN] セクション{ i_section }最終フレーム画像保存時にエラー: {e}")
+                    print(f"[WARN] Error when saving the final frame image for section {i_section}: {e}")
 
             if not high_vram:
                 unload_complete_models()
@@ -479,7 +480,7 @@ with block:
                 use_random_seed = gr.Checkbox(label="Use Random Seed", value=use_random_seed_default)
 
                 n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)  # Not used
-                seed = gr.Number(label="Seed", value=seed_default, precision=0)
+                seed = gr.Slider(label="Seed",value=seed_default,minimum=0,maximum=2**32 - 1,step=1,interactive=True,info="Random seed for reproducibility.")
 
                 def set_random_seed(is_checked):
                     if is_checked:
@@ -498,19 +499,18 @@ with block:
 
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
 
-                # セクションごとの静止画保存チェックボックスを追加（デフォルトON）
-                save_section_frames = gr.Checkbox(label="セクションごとの静止画を保存", value=True, info="各セクションの最終フレームを静止画として保存します（デフォルトON）")
+                save_section_frames = gr.Checkbox(label="Save section frames", value=True, info="Save final frames of each section as static images (default ON)")
 
                 # セクション設定（DataFrameをやめて個別入力欄に変更）
                 section_number_inputs = []
                 section_image_inputs = []
                 section_prompt_inputs = []  # 空リストにしておく
                 with gr.Group():
-                    gr.Markdown("### セクション設定. セクション番号は動画の終わりからカウント.（任意。指定しない場合は通常のImage/プロンプトを使用）")
+                    gr.Markdown("### Section Settings. Section numbers count from the end of the video. (optional. Use default Image/prompt if not specified)")
                     for i in range(3):
                         with gr.Row():
-                            section_number = gr.Number(label=f"セクション番号{i+1}", value=None, precision=0)
-                            section_image = gr.Image(label=f"キーフレーム画像{i+1}", sources="upload", type="numpy", height=200)
+                            section_number = gr.Number(label=f"Section Number {i+1}", value=None, precision=0)
+                            section_image = gr.Image(label=f"Keyframe Image {i+1}", sources="upload", type="numpy", height=200)
                             section_number_inputs.append(section_number)
                             section_image_inputs.append(section_image)
                 # section_settingsは3つの入力欄の値をまとめてリスト化
@@ -542,4 +542,5 @@ block.launch(
     server_name=args.server,
     server_port=args.port,
     share=args.share,
+    inbrowser=args.inbrowser
 )
