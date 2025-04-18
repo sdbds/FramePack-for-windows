@@ -303,16 +303,19 @@ def worker(input_image, end_frame, prompt, n_prompt, seed, total_second_length, 
             # 各セクションの最終フレームを静止画として保存（セクション番号付き）
             if save_section_frames and history_pixels is not None:
                 try:
-                    last_frame = history_pixels[0, :, -1, :, :]  # (C, H, W) 最終フレーム
+                    if i_section == 0 or current_pixels is None:
+                        # 最初のセクションは history_pixels の最後
+                        last_frame = history_pixels[0, :, -1, :, :]
+                    else:
+                        # 2セクション目以降は current_pixels の最後
+                        last_frame = current_pixels[0, :, -1, :, :]
                     last_frame = einops.rearrange(last_frame, 'c h w -> h w c')
                     last_frame = last_frame.cpu().numpy()
                     last_frame = np.clip((last_frame * 127.5 + 127.5), 0, 255).astype(np.uint8)
                     last_frame = resize_and_center_crop(last_frame, target_width=width, target_height=height)
                     if is_first_section and end_frame is None:
-                        # 既存のend保存（_end付き）
                         Image.fromarray(last_frame).save(os.path.join(outputs_folder, f'{job_id}_{i_section}_end.png'))
                     else:
-                        # セクションごとに番号付きで保存
                         Image.fromarray(last_frame).save(os.path.join(outputs_folder, f'{job_id}_{i_section}.png'))
                 except Exception as e:
                     print(f"[WARN] セクション{ i_section }最終フレーム画像保存時にエラー: {e}")
