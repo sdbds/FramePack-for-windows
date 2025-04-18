@@ -40,7 +40,15 @@ In any case, you will directly see the generated frames since it is next-frame(-
 
 **Windows**:
 
-One-click-package will be released soon. Please come back tomorrow.
+[>>> Click Here to Download One-Click Package (CUDA 12.6 + Pytorch 2.6) <<<](https://github.com/lllyasviel/FramePack/releases/download/windows/framepack_cu126_torch26.7z)
+
+After you download, you uncompress, use `update.bat` to update, and use `run.bat` to run.
+
+Note that running `update.bat` is important, otherwise you may be using a previous version with potential bugs unfixed.
+
+![image](https://github.com/lllyasviel/stable-diffusion-webui-forge/assets/19834515/c49bd60d-82bd-4086-9859-88d472582b94)
+
+Note that the models will be downloaded automatically. You will download more than 30GB from HuggingFace.
 
 **Linux**:
 
